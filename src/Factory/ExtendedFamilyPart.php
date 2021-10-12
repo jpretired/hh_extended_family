@@ -25,8 +25,11 @@ namespace Hartenthaler\Webtrees\Module\ExtendedFamily;
 
 use Fisharebest\Webtrees\Individual;
 
+use function array_key_exists;
+
 require_once('Objects/IndividualFamily.php');
 require_once('Objects/FindBranchConfig.php');
+require_once('Objects/FamilyPart.php');
 
 /**
  * abstract class ExtendedFamilyPart
@@ -41,7 +44,7 @@ abstract class ExtendedFamilyPart
      * @var object $efpObject common data structure for all extended family parts
      *                        there are additional specific data structures for each extended family part
      *
-     *  ->groups[]                      array           // not used in extended family part "partner_chains"
+     *  ->groups                        array           // not used in extended family part "partner_chains"
      *  ->maleCount                     int
      *  ->femaleCount                   int
      *  ->otherSexCount                 int
@@ -161,32 +164,22 @@ abstract class ExtendedFamilyPart
     protected function findStepparentsIndividuals(Individual $individual): array
     {
         $stepparents = [];
-        foreach ($this->findBioparentsIndividuals($individual) as $parent) {
+        $bioParents = $this->findBioparentsIndividuals($individual);
+        foreach ($bioParents as $parent) {
             foreach ($this->findPartnersIndividuals($parent->getIndividual()) as $stepparent) {
-                if ($stepparent->getIndividual()->xref() !== $parent->getIndividual()->xref()) {
+                $found = false;
+                foreach ($bioParents as $bioParent)  {      // check if this stepparent is one of the biological parents
+                    if ($stepparent->getIndividual()->xref() == $bioParent->getIndividual()->xref()) {
+                        $found = true;
+                        break;
+                    }
+                }
+                if (!$found) {
                     $stepparents[] = $stepparent;
                 }
             }
         }
         return $stepparents;
-    }
-
-    /**
-     * find individuals: parents for one branch
-     * this function is called via "callFunction"
-     *
-     * @param Individual $individual
-     * @param string $branch ['bio', 'step']
-     * @return array of IndividualFamily
-     */
-    private function findParentsBranchIndividuals(Individual $individual, string $branch): array
-    {
-        if ($branch == 'bio') {
-            return $this->findBioparentsIndividuals($individual);
-        } elseif ($branch == 'step') {
-            return $this->findStepparentsIndividuals($individual);
-        }
-        return [];
     }
 
     /**
@@ -253,6 +246,64 @@ abstract class ExtendedFamilyPart
     }
 
     /**
+     * find individuals: great-grandparents for one branch
+     * this function is called via "callFunction"
+     *
+     * @param Individual $parent
+     * @param string $branch ['bio', 'stepbio', 'step']
+     * @return array of IndividualFamily
+     */
+    private function findGreat_grandparentsBranchIndividuals(Individual $parent, string $branch): array
+    {
+        $greatGrandparents = [];
+        if ($branch == 'bio') {
+            foreach ($this->findBioparentsIndividuals($parent) as $grandparent) {
+                foreach ($this->findBioparentsIndividuals($grandparent->getIndividual()) as $greatGrandparent) {
+                    $greatGrandparent->setReferencePerson(1, $grandparent->getIndividual());
+                    $greatGrandparents[] = $greatGrandparent;
+                }
+            }
+        } elseif ($branch == 'stepbio') {
+            foreach ($this->findBioparentsIndividuals($parent) as $grandparent) {
+                foreach ($this->findStepparentsIndividuals($grandparent->getIndividual()) as $greatGrandparent) {
+                    $greatGrandparent->setReferencePerson(1, $grandparent->getIndividual());
+                    $greatGrandparents[] = $greatGrandparent;
+                }
+            }
+        } elseif ($branch == 'step') {
+            foreach ($this->findStepparentsIndividuals($parent) as $stepgrandparent) {
+                foreach ($this->findBioparentsIndividuals($stepgrandparent->getIndividual()) as $greatGrandparent) {
+                    $greatGrandparent->setReferencePerson(1, $stepgrandparent->getIndividual());
+                    $greatGrandparents[] = $greatGrandparent;
+                }
+                foreach ($this->findStepparentsIndividuals($stepgrandparent->getIndividual()) as $greatGrandparent) {
+                    $greatGrandparent->setReferencePerson(1, $stepgrandparent->getIndividual());
+                    $greatGrandparents[] = $greatGrandparent;
+                }
+            }
+        }
+        return $greatGrandparents;
+    }
+
+    /**
+     * find individuals: grandparents for one branch
+     * this function is called via "callFunction"
+     *
+     * @param Individual $parent
+     * @param string $branch ['bio', 'step']
+     * @return array of IndividualFamily
+     */
+    private function findGrandparentsBranchIndividuals(Individual $parent, string $branch): array
+    {
+        if ($branch == 'bio') {
+            return $this->findBioparentsIndividuals($parent);
+        } elseif ($branch == 'step') {
+            return $this->findStepparentsIndividuals($parent);
+        }
+        return [];
+    }
+
+    /**
      * find individuals: full or half cousins based on father or mother (in first family)
      * this function is called via "callFunction"
      *
@@ -260,7 +311,7 @@ abstract class ExtendedFamilyPart
      * @param string $branch ['full', 'half']
      * @return array of IndividualFamily
      */
-    protected function findCousinsBranchIndividuals(Individual $parent, string $branch): array
+    private function findCousinsBranchIndividuals(Individual $parent, string $branch): array
     {
         $cousins = [];
         foreach ((($branch == 'full')? $this->findFullsiblingsIndividuals($parent): $this->findHalfsiblingsIndividuals($parent)) as $Sibling) {
@@ -274,7 +325,9 @@ abstract class ExtendedFamilyPart
     }
 
     /**
-     * add cousins in both branches ['full','half'] or add grandparents in both branches ['bio','step']
+     * add great-grandparents in three branches ['bio', 'stepbio', 'step'] or
+     * add grandparents in both branches ['bio','step'] or
+     * add cousins in both branches ['full','half']
      *
      * @param FindBranchConfig $config configuration parameters
      */
@@ -282,8 +335,10 @@ abstract class ExtendedFamilyPart
     {
         foreach ($config->getBranches() as $branch) {
             foreach ($this->findBioparentsIndividuals($this->getProband()) as $parent) {
-                foreach ($this->callFunction('find'.ucfirst($config->getCallFamilyPart()).'BranchIndividuals', $parent->getIndividual(), $branch) as $Obj) {
-                    $this->addIndividualToFamily($Obj, $config->getConst()[$branch][$parent->getIndividual()->sex()]);
+                foreach ($this->callFunction('find'.ucfirst($config->getCallFamilyPart()).'BranchIndividuals',
+                                             $parent->getIndividual(),
+                                             $branch) as $obj) {
+                    $this->addIndividualToFamily($obj, $config->getConst()[$branch][$parent->getIndividual()->sex()]);
                 }
             }
         }
@@ -292,7 +347,7 @@ abstract class ExtendedFamilyPart
     /**
      * call functions to get a branch of an extended family part
      *
-     * @param string $name                  name of function to be called
+     * @param string $name                  name of function to be called ['great_grandparents', 'grandparents', 'cousins']
      * @param Individual $individual        Individual
      * @param string $branch                e.g. ['bio', 'step', 'full', half']
      * @return array of IndividualFamily
@@ -309,111 +364,74 @@ abstract class ExtendedFamilyPart
      *
      * @param IndividualFamily $indifam
      * @param string $groupName
-     * @param Individual|null $referencePerson
-     * @param Individual|null $referencePerson2
      */
-    protected function addIndividualToFamily(IndividualFamily $indifam, string $groupName = '', Individual $referencePerson = null, Individual $referencePerson2 = null)
+    protected function addIndividualToFamily(IndividualFamily $indifam, string $groupName)
     {
-        if (!isset($referencePerson)) {
-            $referencePerson = $this->getProband();
+        if ($this->isIndividualAlreadyMember($indifam)) {
+                    return;
         }
-        $found = false;
-        /*
-        if ($groupName == '') {
-            error_log('Soll ' . $indifam->getIndividual()->fullName() . ' (' . $indifam->getIndividual()->xref() . ') der Familie ' . $indifam->getFamily()->fullName() . ' (' . $indifam->getFamily()->xref() . ') hinzugefuegt werden? ');
+        if (!isset($indifam->getReferencePersons()[1])) {
+            $indifam->setReferencePerson(1, $this->getProband());
+        }
+        if (array_key_exists($groupName, $this->efpObject->groups)) {
+            $this->addIndividualToGroup($indifam, $groupName);                  // add individual to existing group
         } else {
-            error_log('Soll ' . $indifam->getIndividual()->fullName() . ' (' . $indifam->getIndividual()->xref() . ') der Gruppe "' . $groupName . '" hinzugefuegt werden? ');
-        }
-        */
-        foreach ($this->efpObject->groups as $groupObj) {                      // check if individual is already a member of this part of the extended family
-            foreach ($groupObj->members as $member) {
-                //echo 'Teste member = ' . $member->xref() . ': ';
-                if ($member->xref() == $indifam->getIndividual()->xref()) {
-                    $found = true;
-                    //echo 'Person ' . $indifam->getIndividual()->fullName() . ' ist bereits in group-Objekt für Familie ' . $groupObj->family->fullName() . ' vorhanden. ';
-                    break;
-                }
-            }
-        }
-        if (!$found) {                                                                              // individual has to be added
-            //echo "add person: ".$indifam->getIndividual()->fullName().". <br>";
-            if ($groupName == '') {
-                foreach ($this->efpObject->groups as $famkey => $groupObj) {                       // check if this family is already stored in this part of the extended family
-                    if ($groupObj->family->xref() == $indifam->getFamily()->xref()) {               // family exists already
-                        //echo 'famkey in bereits vorhandener Familie: ' . $famkey . ' (Person ' . $individual->fullName() . ' in Objekt für Familie ' . $extendedFamilyPart->groups[$famkey]->family->fullName() . '); ';
-                        $this->addIndividualToGroup($indifam, $groupName, $referencePerson, $referencePerson2);
-                        $found = true;
-                        break;
-                    }
-                }
-            } elseif (array_key_exists($groupName, $this->efpObject->groups)) {
-                //echo 'In bereits vorhandener Gruppe "' . $groupName . '" Person ' . $individual->xref() . ' hinzugefügt. ';
-                $this->addIndividualToGroup($indifam, $groupName, $referencePerson, $referencePerson2);
-                $found = true;
-            }
-            if (!$found) {                                                                              // individual not found and family not found
-                $newObj = (object)[];
-                $newObj->members[] = $indifam->getIndividual();
-                $newObj->family = $indifam->getFamily();
-                $labels = [];
-/*
-                if ($referencePerson) {               // tbd: Logik ist verkehrt! Richtige Personen auswählen (siehe Kommentar ganz oben)!
-                    $labels[] = ExtendedFamily::getRelationshipName($referencePerson, $this->getProband(), '');
-                }
-*/
-                $labels = array_merge($labels, ExtendedFamily::generateChildLabels($indifam->getIndividual()));
-                $newObj->labels[] = $labels;
-                $newObj->families[] = $indifam->getFamily();
-                $newObj->familiesStatus[] = ExtendedFamily::findFamilyStatus($indifam->getFamily());
-                $newObj->referencePersons[] = $referencePerson;
-                $newObj->referencePersons2[] = $referencePerson2;
-                if ($this->efpObject->partName == 'grandparents' || $this->efpObject->partName == 'parents') {
-                    $newObj->familyStatus = ExtendedFamily::findFamilyStatus($indifam->getFamily());
-                    if ($referencePerson) {
-                        $newObj->partner = $referencePerson;
-                        if ($referencePerson2) {
-                            foreach ($referencePerson2->spouseFamilies() as $fam) {
-                                //echo "Teste Familie ".$fam->fullName().":";
-                                foreach ($fam->spouses() as $partner) {
-                                    if ($partner->xref() == $referencePerson->xref()) {
-                                        //echo $referencePerson->fullName();
-                                        $newObj->partnerFamilyStatus = ExtendedFamily::findFamilyStatus($fam);
-                                    }
-                                }
-                            }
-                        } else {
-                            $newObj->partnerFamilyStatus = 'Partnership';
-                        }
-                    }
-                }
-                if ($groupName == '') {
-                    $this->efpObject->groups[] = $newObj;
-                    //echo "<br>Neu hinzugefügte Familie Nr. " . (count($this->efpObject->groups) - 1) . ' (Person ' . $indifam->getIndividual()->fullName() . ' in Objekt für Familie ' . $this->efpObject->groups[count($this->efpObject->groups) - 1]->family->xref() . '); ';
-                } else {
-                    $newObj->groupName = $groupName;
-                    $this->efpObject->groups[$groupName] = $newObj;
-                    //echo 'Neu hinzugefügte Gruppe "' . $groupName . '" (Person ' . $individual->xref() . '). ';
-                }
-            }
+            $this->addIndividualToNewGroup($indifam, $groupName);               // add individual to new group
         }
     }
 
     /**
-     * add an individual to a group of the extended family
+     * check if individual is already a member of any group of this extended family part
+     *
+     * @param IndividualFamily $indifam
+     * @return bool
+     */
+    public function isIndividualAlreadyMember(IndividualFamily $indifam): bool
+    {
+        foreach ($this->efpObject->groups as $groupObj) {
+            foreach ($groupObj->members as $member) {
+                if ($member->xref() == $indifam->getIndividual()->xref()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * add an individual to an already existing group as part of an extended family part
      *
      * @param IndividualFamily $indifam
      * @param string $groupName
-     * @param Individual|null $referencePerson
-     * @param Individual|null $referencePerson2
      */
-    private function addIndividualToGroup(IndividualFamily $indifam, string $groupName, Individual $referencePerson = null, Individual $referencePerson2 = null)
+    private function addIndividualToGroup(IndividualFamily $indifam, string $groupName)
     {
         $this->efpObject->groups[$groupName]->members[] = $indifam->getIndividual();
-        $this->efpObject->groups[$groupName]->labels[] = ExtendedFamily::generateChildLabels($indifam->getIndividual());
+        $this->efpObject->groups[$groupName]->labels[] = ExtendedFamilySupport::generateChildLabels($indifam->getIndividual());
         $this->efpObject->groups[$groupName]->families[] = $indifam->getFamily();
-        $this->efpObject->groups[$groupName]->familiesStatus[] = ExtendedFamily::findFamilyStatus($indifam->getFamily());
-        $this->efpObject->groups[$groupName]->referencePersons[] = $referencePerson;
-        $this->efpObject->groups[$groupName]->referencePersons2[] = $referencePerson2;
+        $this->efpObject->groups[$groupName]->familiesStatus[] = ExtendedFamilySupport::findFamilyStatus($indifam->getFamily());
+        $this->efpObject->groups[$groupName]->referencePersons[] = $indifam->getReferencePersons();
+    }
+
+    /**
+     * add an individual to a new group as part of an extended family part
+     * tbd: add more labels to a person if there are special situations using
+     *      $labels[] = ExtendedFamily::getRelationshipName($referencePerson, $this->getProband(), '');
+     *
+     * @param IndividualFamily $indifam
+     * @param string $groupName
+     */
+    private function addIndividualToNewGroup(IndividualFamily $indifam, string $groupName)
+    {
+        $newObj = new FamilyPart(
+            $groupName,
+            $indifam->getIndividual(),
+            ExtendedFamilySupport::generateChildLabels($indifam->getIndividual()),
+            $indifam->getFamily(),
+            ExtendedFamilySupport::findFamilyStatus($indifam->getFamily()),
+            $indifam->getReferencePersons()
+        );
+        $this->efpObject->groups[$groupName] = $newObj->getFamilyPart();
     }
 
     /**
@@ -424,7 +442,7 @@ abstract class ExtendedFamilyPart
     protected function filterAndAddCountersToFamilyPartObject(string $filterOption)
     {
         if ($filterOption !== 'all') {
-            $this->filter(ExtendedFamily::convertfilterOptions($filterOption));
+            $this->filter(ExtendedFamilySupport::convertfilterOptions($filterOption));
         }
         $this->addCountersToFamilyPartObject();
     }

@@ -37,6 +37,7 @@ class IndividualFamily
      * @var object $objectIndiFamily
      *  ->individual                    Individual
      *  ->family                        object (?)
+     *  ->referencePersons[]            array of Individual
      */
     private $objectIndiFamily;
 
@@ -47,8 +48,13 @@ class IndividualFamily
      *
      * @param Individual $individual
      * @param object|null $family
+     * @param Individual|null $referencePerson
+     * @param Individual|null $referencePerson2
      */
-    public function __construct(Individual $individual, object $family = null)
+    public function __construct(Individual $individual,
+                                object $family = null,
+                                Individual $referencePerson = null,
+                                Individual $referencePerson2 = null)
     {
         $this->objectIndiFamily = (object)[];
         if (isset($individual) && ($individual instanceof Individual)) {
@@ -57,6 +63,17 @@ class IndividualFamily
         if (isset($family)) {
             $this->objectIndiFamily->family = $family;
         }
+        $this->objectIndiFamily->referencePersons = [];
+        foreach ([1 => $referencePerson, 2 => $referencePerson2] as $refIndex => $refPerson) {
+            if (isset($refPerson) && ($refPerson instanceof Individual)) {
+                $this->objectIndiFamily->referencePersons[$refIndex] = $refPerson;
+            }
+        }
+        /*
+        echo "<br>IndividualFamily: " . $individual->fullName() . " - ";
+        foreach ($this->objectIndiFamily->referencePersons as $key => $value) {
+            echo " $key => " . $value->fullName() . "; ";
+        } */
     }
 
     /**
@@ -64,7 +81,7 @@ class IndividualFamily
      *
      * @return object
      */
-    public function getobjectIndiFamily(): object
+    public function getObjectIndiFamily(): object
     {
         return $this->objectIndiFamily;
     }
@@ -93,11 +110,32 @@ class IndividualFamily
     }
 
     /**
+     * get reference persons in this object
+     *
+     * @return array
+     */
+    public function getReferencePersons(): array
+    {
+        return $this->objectIndiFamily->referencePersons;
+    }
+
+    /**
+     * set reference person of this object
+     *
+     * @param int $index
+     * @param Individual $referencePerson
+     */
+    public function setReferencePerson(int $index, Individual $referencePerson)
+    {
+        $this->objectIndiFamily->referencePersons[$index] = $referencePerson;
+    }
+
+    /**
      * set object
      *
      * @param object $object
      */
-    public function setobjectIndiFamily(object $object): void
+    public function setObjectIndiFamily(object $object): void
     {
         $this->objectIndiFamily = $object;
     }
